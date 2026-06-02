@@ -8,7 +8,7 @@
 
 ## Overview
 
-Most LLM agents are stateless — every conversation starts from scratch. MemoryOS gives an agent persistent, layered memory across three tiers: a sliding window buffer for recent context, a ChromaDB vector store for long-term semantic retrieval, and an LLM-based episodic summarisation layer that compresses old turns rather than losing them. An evaluation harness measures memory hit rate, faithfulness, and response quality lift.
+Most LLM agents are stateless — every conversation starts from scratch. The naive fix is to stuff the full history into context, which breaks at scale; the next-naive fix is pure vector retrieval, which loses recent context fidelity. MemoryOS uses three coordinated tiers — a sliding-window buffer for recent turns, a ChromaDB vector store for long-term semantic retrieval, and an LLM-based episodic summarization layer that compresses evicted turns instead of losing them. Each tier handles what the others do badly.
 
 ## Architecture
 ```
