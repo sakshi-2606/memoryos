@@ -64,7 +64,7 @@ LLM (gpt-4o-mini) → Response
 
 ### Installation
 ```bash
-git clone https://github.com/peace-chaos26/memoryos.git
+git clone https://github.com/sakshi-2606/memoryos.git
 cd memoryos
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
