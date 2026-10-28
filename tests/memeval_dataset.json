@@ -1,0 +1,46 @@
+{
+  "dataset_version": "1.0",
+  "description": "Small labeled multi-turn set for MemoryOS memory-specific evals: retrieval correctness, cross-session isolation, and episodic fact retention.",
+  "facts": [
+    { "id": "f1", "session": "s1", "content": "I prefer Python over Java for backend development." },
+    { "id": "f2", "session": "s1", "content": "I'm building a RAG system that uses ChromaDB as its vector store." },
+    { "id": "f3", "session": "s1", "content": "On weekends I enjoy playing the violin." },
+    { "id": "f4", "session": "s1", "content": "I once visited Japan for a developer conference." },
+    { "id": "f5", "session": "s2", "content": "My current side project is codenamed Bluebird." },
+    { "id": "f6", "session": "s3", "content": "I am allergic to shellfish." },
+    { "id": "f7", "session": "s3", "content": "I live in Bengaluru." },
+    { "id": "f8", "session": "s3", "content": "I drive a blue Honda City." }
+  ],
+  "retrieval_probes": [
+    {
+      "id": "p1",
+      "session": "s1",
+      "query": "What programming language do I prefer for backend work?",
+      "relevant": ["f1"],
+      "expected_tier": "long_term"
+    },
+    {
+      "id": "p2",
+      "session": "s1",
+      "query": "Which vector database am I using for my project?",
+      "relevant": ["f2"],
+      "expected_tier": "long_term"
+    }
+  ],
+  "leakage_probes": [
+    {
+      "id": "lk1",
+      "query": "What is the codename of my side project?",
+      "fact": "f5",
+      "planted_session": "s2",
+      "query_session": "s1"
+    }
+  ],
+  "episodic_cases": [
+    {
+      "id": "ep1",
+      "session": "s3",
+      "facts": ["f6", "f7", "f8"]
+    }
+  ]
+}
