@@ -27,8 +27,26 @@ class ShortTermMemory:
         self._buffer: deque[Message] = deque(maxlen=config.short_term_window)
         self._turn_counter: int = 0
 
-    def add(self, role: str, content: str) -> Message:
-        """Add a new message to the buffer. Returns the Message object."""
+    def add(self, role: str, content: str) -> tuple[Message, Message | None]:
+        """
+        Add a new message to the buffer.
+
+        Returns (message, evicted):
+          message  — the Message just added.
+          evicted  — the oldest Message that was silently pushed out because
+                     the window was already full (deque maxlen), or None if
+                     nothing was dropped.
+
+        Why the peek: a deque(maxlen) drops its leftmost item automatically on
+        overflow and tells you nothing. Capturing that item here is what lets
+        the coordinator record a window-overflow eviction in the memory trace.
+        The buffer's behaviour is otherwise unchanged.
+        """
+        evicted: Message | None = None
+        if self._buffer.maxlen is not None and len(self._buffer) == self._buffer.maxlen:
+            # buffer is full — the leftmost item is about to be pushed out
+            evicted = self._buffer[0]
+
         message = Message(
             role=role,
             content=content,
@@ -36,7 +54,7 @@ class ShortTermMemory:
         )
         self._buffer.append(message)
         self._turn_counter += 1
-        return message
+        return message, evicted
 
     def get_all(self) -> list[Message]:
         """Return all messages currently in the buffer, oldest first."""

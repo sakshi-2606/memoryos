@@ -65,7 +65,7 @@ class MemoryManager:
         }
 
         # 1. Always add to short-term
-        message = self.short_term.add(role, content)
+        message, _evicted = self.short_term.add(role, content)
         result["added_to_short_term"] = True
 
         # 2. Conditionally add to long-term
