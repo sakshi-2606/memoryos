@@ -74,9 +74,9 @@ class MemoryManager:
             result["added_to_long_term"] = True
 
         # 3. Trigger episodic summarisation if needed
-        episode = self.episodic.maybe_summarise(self.short_term)
-        if episode:
-            result["episode_created"] = episode
+        summ = self.episodic.maybe_summarise(self.short_term)
+        if summ:
+            result["episode_created"] = summ.episode
 
         return result
 

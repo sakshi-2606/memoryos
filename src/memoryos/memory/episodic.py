@@ -15,6 +15,22 @@ class Episode:
     source_turn_count: int        # how many turns were compressed
 
 
+@dataclass
+class SummarisationResult:
+    """
+    What one summarisation pass produced — the tier's own domain facts,
+    handed back to the coordinator so it can record them in the trace.
+
+    - episode: the Episode that was created and stored.
+    - evicted_turns: the turns removed from short-term to make this episode
+      (the second eviction path — policy = summarisation).
+    - summarization_tokens: tokens the LLM summariser call spent.
+    """
+    episode: Episode
+    evicted_turns: list[Message]
+    summarization_tokens: int
+
+
 class EpisodicMemory:
     """
     Summarisation layer that compresses old short-term turns into episodes.
@@ -60,8 +76,14 @@ Summary:"""
             lines.append(f"{turn.role.capitalize()} (turn {turn.turn_index}): {turn.content}")
         return "\n".join(lines)
 
-    def _summarise(self, turns: list[Message]) -> str:
-        """Call LLM to summarise a list of turns into one episode."""
+    def _summarise(self, turns: list[Message]) -> tuple[str, int]:
+        """
+        Call LLM to summarise a list of turns into one episode.
+
+        Returns (summary_text, tokens_used). The token count used to be
+        discarded on response.usage; we keep it so the trace can report the
+        real cost of summarisation.
+        """
         formatted = self._format_turns_for_prompt(turns)
         prompt = self.SUMMARISE_PROMPT.format(turns=formatted)
 
@@ -71,12 +93,15 @@ Summary:"""
             max_tokens=200,
             temperature=0.3,   # low temp = more faithful, less creative
         )
-        return response.choices[0].message.content.strip()
+        text = response.choices[0].message.content.strip()
+        tokens = response.usage.total_tokens if response.usage else 0
+        return text, tokens
 
-    def maybe_summarise(self, short_term) -> Episode | None:
+    def maybe_summarise(self, short_term) -> SummarisationResult | None:
         """
         Check if short-term memory is ready for summarisation.
-        If yes: evict oldest turns, summarise, store episode, return it.
+        If yes: evict oldest turns, summarise, store episode, return a
+        SummarisationResult (episode + evicted turns + token cost).
         If no: return None.
 
         Args:
@@ -91,7 +116,7 @@ Summary:"""
             return None
 
         # Summarise the evicted turns
-        summary_text = self._summarise(evicted_turns)
+        summary_text, summarization_tokens = self._summarise(evicted_turns)
 
         # Create and store the episode
         episode = Episode(
@@ -106,7 +131,12 @@ Summary:"""
         )
         self._episodes.append(episode)
         self._episode_counter += 1
-        return episode
+
+        return SummarisationResult(
+            episode=episode,
+            evicted_turns=evicted_turns,
+            summarization_tokens=summarization_tokens,
+        )
 
     def get_all_episodes(self) -> list[Episode]:
         """Return all episodes, oldest first."""
