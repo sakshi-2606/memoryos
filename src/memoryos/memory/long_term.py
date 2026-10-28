@@ -121,12 +121,16 @@ class LongTermMemory:
         # Return sorted by relevance, most relevant first
         return sorted(memories, key=lambda m: m.relevance_score, reverse=True)
 
-    def to_prompt_format(self, query: str) -> str:
+    @staticmethod
+    def format_memories(memories: list[MemoryEntry]) -> str:
         """
-        Retrieve relevant memories and format them as a
-        context block for injection into the system prompt.
+        Format an already-retrieved list of memories into a context block.
+
+        Pure function — no embedding, no I/O. Split out from to_prompt_format()
+        so a caller (the coordinator) can call retrieve() ONCE, keep the
+        structured list with scores for the trace, and still format the same
+        block without a second embedding call.
         """
-        memories = self.retrieve(query)
         if not memories:
             return ""
 
@@ -136,6 +140,15 @@ class LongTermMemory:
                 f"- [{mem.role}] (relevance: {mem.relevance_score}): {mem.content}"
             )
         return "\n".join(lines)
+
+    def to_prompt_format(self, query: str) -> str:
+        """
+        Retrieve relevant memories and format them as a
+        context block for injection into the system prompt.
+
+        Behaviour unchanged — now just composes retrieve() + format_memories().
+        """
+        return self.format_memories(self.retrieve(query))
 
     def count(self) -> int:
         return self._collection.count()

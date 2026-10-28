@@ -17,6 +17,7 @@ class ChatResponse(BaseModel):
     turn: int
     response: str
     memory_metadata: dict
+    trace: dict | None = None   # per-turn memory trace (when enabled + exposed)
 
 
 class MemoryStateResponse(BaseModel):
@@ -91,11 +92,17 @@ async def chat(request: ChatRequest):
 
     result = agent.chat(request.message)
 
+    # Expose the trace over HTTP only when configured to. The agent still
+    # builds it (for logging/dumps) based on config.trace.enabled; this flag
+    # only controls whether it rides along in the response body.
+    trace = result.get("trace") if _config.trace.include_in_response else None
+
     return ChatResponse(
         session_id=result["session_id"],
         turn=result["turn"],
         response=result["response"],
         memory_metadata=result["memory"],
+        trace=trace,
     )
 
 

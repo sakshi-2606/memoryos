@@ -31,7 +31,6 @@ jsonschema-specifications==2025.9.1
 kubernetes==35.0.0
 markdown-it-py==4.0.0
 mdurl==0.1.2
--e git+https://github.com/peace-chaos26/memoryos.git@409f847e0f6e6dc18fc422b8eaedefec511d4cc0#egg=memoryos
 mmh3==5.2.1
 mpmath==1.3.0
 numpy==2.4.4
@@ -81,3 +80,4 @@ watchfiles==1.1.1
 websocket-client==1.9.0
 websockets==16.0
 zipp==3.23.0
+tiktoken

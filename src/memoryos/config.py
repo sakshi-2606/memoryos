@@ -49,6 +49,20 @@ class StorageConfig:
     )
     collection_name: str = "long_term_memory"
 
+@dataclass(frozen=True)
+class TraceConfig:
+    """Configuration for the per-turn memory trace."""
+ 
+    # Master switch. When False, the turn loop skips building the trace entirely.
+    enabled: bool = True
+ 
+    # When True, the full trace is attached to the /chat HTTP response.
+    # Turn off if the response gets noisy — the trace can still be logged/dumped.
+    include_in_response: bool = True
+ 
+    # Snippets of retrieved memories / episodes are truncated to this many chars
+    # so the trace stays compact.
+    snippet_max_chars: int = 200
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -57,6 +71,7 @@ class AppConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    trace: TraceConfig = field(default_factory=TraceConfig)
     openai_api_key: str = field(
         default_factory=lambda: os.getenv("OPENAI_API_KEY", "")
     )
