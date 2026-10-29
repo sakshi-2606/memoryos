@@ -39,6 +39,7 @@ class EvictionPolicy(str, Enum):
     """Which mechanism removed an item from a tier."""
     SUMMARISATION = "summarisation"      # evict_oldest() after an episode was made
     WINDOW_OVERFLOW = "window_overflow"  # deque(maxlen) silently dropped the oldest
+    TOKEN_BUDGET = "token_budget"
 
 
 # ── Leaf records ─────────────────────────────────────────────────────────────
