@@ -90,13 +90,6 @@ def test_relevant_ranked_first(make_agent, probe):
         f"full order {retrieved}"
     )
 
-
-@pytest.mark.xfail(
-    reason="F2: similarity_threshold (0.5) with similarity=1-(distance/2) admits "
-           "unrelated distractors (they clear 0.5), so threshold-filtered precision "
-           "is poor — retrieval leans on ranking, not filtering. Tune in a later slice.",
-    strict=True,
-)
 def test_threshold_excludes_distractors(make_agent):
     """Everything the retriever ADMITS (post-threshold) should be mostly relevant."""
     probe = DATASET.retrieval_probes[0]

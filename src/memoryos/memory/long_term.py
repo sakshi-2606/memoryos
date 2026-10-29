@@ -105,7 +105,7 @@ class LongTermMemory:
             # ChromaDB returns cosine distance (0=identical, 2=opposite)
             # Convert to similarity score (1=identical, 0=unrelated)
             distance = results["distances"][0][i]
-            similarity = 1 - (distance / 2)
+            similarity = 1 - distance
 
             if similarity >= self.similarity_threshold:
                 meta = results["metadatas"][0][i]
