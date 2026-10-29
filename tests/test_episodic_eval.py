@@ -26,6 +26,8 @@ from memoryos.config import AppConfig
 from memoryos.agent import MemoryAgent
 from memoryos.memeval import load_dataset
 
+pytestmark = pytest.mark.integration
+
 DATASET = load_dataset(Path(__file__).parent / "memeval_dataset.json")
 
 # a distinctive token from each planted fact — a faithful episode should retain it

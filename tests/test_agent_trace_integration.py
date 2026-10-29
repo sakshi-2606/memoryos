@@ -12,12 +12,15 @@ Run from repo root (venv active):
 
 import json
 import time
+import pytest
 
 from memoryos.config import AppConfig
 from memoryos.agent import MemoryAgent
 
+pytestmark = pytest.mark.integration
 
-def main() -> None:
+
+def test_live_turn_trace() -> None:
     config = AppConfig()
     config.validate()  # fail fast if OPENAI_API_KEY is missing
 
@@ -70,4 +73,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_live_turn_trace()
