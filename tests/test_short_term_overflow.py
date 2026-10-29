@@ -13,7 +13,7 @@ from memoryos.config import MemoryConfig
 from memoryos.memory.short_term import ShortTermMemory
 
 
-def main() -> None:
+def test_window_overflow_captured() -> None:
     # tiny window so we can force overflow in a few adds
     cfg = MemoryConfig(short_term_window=3)
     st = ShortTermMemory(cfg)
@@ -42,4 +42,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_window_overflow_captured()

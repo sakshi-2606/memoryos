@@ -15,7 +15,7 @@ from memoryos.memeval import load_dataset, DATASET_VERSION
 DATASET_PATH = Path(__file__).parent / "memeval_dataset.json"
 
 
-def main() -> None:
+def test_dataset_loads() -> None:
     ds = load_dataset(DATASET_PATH)
 
     assert ds.dataset_version == DATASET_VERSION
@@ -44,4 +44,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_dataset_loads()

@@ -14,7 +14,7 @@ from memoryos.memory.short_term import ShortTermMemory
 from memoryos.memory.episodic import EpisodicMemory, SummarisationResult
 
 
-def main() -> None:
+def test_summarisation_result() -> None:
     mem_cfg = MemoryConfig(
         short_term_window=10,
         summarisation_threshold=3,
@@ -52,4 +52,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_summarisation_result()

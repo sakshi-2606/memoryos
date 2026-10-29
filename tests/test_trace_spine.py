@@ -101,7 +101,7 @@ def build_sample_trace() -> MemoryTrace:
     )
 
 
-def main() -> None:
+def test_trace_spine_serialises() -> None:
     trace = build_sample_trace()
 
     # 1. serialise
@@ -127,4 +127,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_trace_spine_serialises()

@@ -17,7 +17,7 @@ from memoryos.memory.manager import MemoryManager
 from memoryos.memory.trace import TierStatus, EvictionPolicy
 
 
-def main() -> None:
+def test_manager_builds_trace() -> None:
     config = AppConfig()
     mgr = MemoryManager(config, session_id=f"trace-test-{int(time.time())}")
 
@@ -73,4 +73,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_manager_builds_trace()
