@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DATASET_VERSION = "1.0"
+DATASET_VERSION = "1.1"
 
 
 # ── dataclasses ────────────────────────────────────────────────────────────────

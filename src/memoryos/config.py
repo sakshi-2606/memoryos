@@ -16,7 +16,7 @@ class MemoryConfig:
     long_term_top_k: int = 5
 
     # Long-term: minimum similarity score to include a memory (0.0 to 1.0)
-    long_term_similarity_threshold: float = 0.5
+    long_term_similarity_threshold: float = 0.40
 
     # Episodic: summarise when buffer exceeds this many turns
     summarisation_threshold: int = 8
