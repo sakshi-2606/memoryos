@@ -24,11 +24,9 @@ class MemoryManager:
     Responsibilities:
     - Route incoming messages to the right tiers
     - Assemble context from all tiers for each LLM call
-    - Trigger episodic summarisation when needed
-    - Resolve conflicts between tiers (recency wins)
+    - Summarise turns the short-term tier evicts for exceeding its token budget
     - Produce the per-turn memory trace (times each tier call from out here,
-      reads each tier's returned domain facts, and records them — the tiers
-      stay unaware that tracing exists).
+      reads each tier's returned domain facts, and records them).
     """
 
     # Messages shorter than this are not stored in long-term
@@ -41,27 +39,30 @@ class MemoryManager:
         "alright", "sounds good", "makes sense"
     }
 
+    _BASE_SYSTEM_PROMPT = (
+        "You are a helpful assistant with access to memory "
+        "from previous conversations."
+    )
+
     def __init__(self, config: AppConfig, session_id: str) -> None:
         self.session_id = session_id
         self.config = config
 
+        # tiktoken encoder first — the short-term tier needs it for budgeting.
+        try:
+            self._token_encoder = tiktoken.encoding_for_model(config.model.llm_model)
+        except KeyError:
+            self._token_encoder = tiktoken.get_encoding("cl100k_base")
+
         # Instantiate all three tiers
-        self.short_term = ShortTermMemory(config.memory)
+        self.short_term = ShortTermMemory(config.memory, self._count_tokens)
         self.long_term = LongTermMemory(
             memory_config=config.memory,
             model_config=config.model,
             storage_config=config.storage,
             session_id=session_id,
         )
-        self.episodic = EpisodicMemory(config.memory, config.model)
-
-        # tiktoken encoder for honest per-tier prompt token counts.
-        # Built once here; encoding_for_model knows the common OpenAI models,
-        # and we fall back to cl100k_base for anything it doesn't recognise.
-        try:
-            self._token_encoder = tiktoken.encoding_for_model(config.model.llm_model)
-        except KeyError:
-            self._token_encoder = tiktoken.get_encoding("cl100k_base")
+        self.episodic = EpisodicMemory(config.model)
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ class MemoryManager:
         return True
 
     def _count_tokens(self, text: str) -> int:
-        """Token count for a block of prompt text (0 for empty)."""
+        """Token count for a block of text (0 for empty)."""
         if not text:
             return 0
         return len(self._token_encoder.encode(text))
@@ -83,35 +84,29 @@ class MemoryManager:
     # ── legacy (untraced) API — kept so existing callers keep working ─────────
 
     def add_message(self, role: str, content: str) -> dict:
-        """
-        Process an incoming message through all tiers. Legacy dict return,
-        used by the current agent until 2c-ii switches it to the traced path.
-        """
+        """Process an incoming message through all tiers (legacy dict return)."""
         result = {
             "added_to_short_term": False,
             "added_to_long_term": False,
             "episode_created": None,
         }
 
-        message, _evicted = self.short_term.add(role, content)
+        message, evicted = self.short_term.add(role, content)
         result["added_to_short_term"] = True
 
         if self._is_worth_storing(content):
             self.long_term.add(role, content, turn_index=message.turn_index)
             result["added_to_long_term"] = True
 
-        summ = self.episodic.maybe_summarise(self.short_term)
-        if summ:
-            result["episode_created"] = summ.episode
+        if evicted:
+            summ = self.episodic.summarise_turns(evicted)
+            if summ:
+                result["episode_created"] = summ.episode
 
         return result
 
     def get_context(self, current_query: str) -> dict:
-        """
-        Assemble context from all three tiers (untraced). NOTE: calls
-        long_term.to_prompt_format(), which retrieves again — the traced path
-        below avoids that double retrieval.
-        """
+        """Assemble context from all three tiers (untraced; double-retrieves)."""
         return {
             "episodic": self.episodic.to_prompt_format(),
             "long_term": self.long_term.to_prompt_format(current_query),
@@ -121,20 +116,11 @@ class MemoryManager:
     def build_system_prompt(self, current_query: str) -> str:
         """Assemble memory tiers into one system prompt block (untraced)."""
         context = self.get_context(current_query)
-        sections = []
-
-        base = (
-            "You are a helpful assistant with access to memory "
-            "from previous conversations."
-        )
-        sections.append(base)
-
+        sections = [self._BASE_SYSTEM_PROMPT]
         if context["episodic"]:
             sections.append(context["episodic"])
-
         if context["long_term"]:
             sections.append(context["long_term"])
-
         return "\n\n".join(sections)
 
     def get_messages_for_llm(self, current_query: str) -> list[dict]:
@@ -147,33 +133,18 @@ class MemoryManager:
 
     # ── traced API — the coordinator layer for the memory trace ──────────────
 
-    _BASE_SYSTEM_PROMPT = (
-        "You are a helpful assistant with access to memory "
-        "from previous conversations."
-    )
-
     def add_message_traced(self, role: str, content: str, label: str = "") -> WriteTrace:
         """
-        Same tier operations as add_message(), but returns a WriteTrace that
-        records per-tier status + latency, whether long-term stored the item,
-        any summarisation tokens, and every eviction (both paths).
-
-        Error-status population is deferred to the graceful-failure slice (#7):
-        for now tier exceptions propagate exactly as they do today.
+        Same tier operations as add_message(), but returns a WriteTrace recording
+        per-tier status/latency, long-term stored flag, summarisation tokens, and
+        every eviction (now driven by the short-term token budget).
         """
         wt = WriteTrace(label=label)
 
-        # 1. short-term — always
+        # 1. short-term — always; token-budget eviction returns the overflow
         t0 = time.perf_counter()
-        message, overflow = self.short_term.add(role, content)
+        message, evicted = self.short_term.add(role, content)
         wt.short_term = ShortTermWrite(status=TierStatus.OK, latency_ms=_elapsed_ms(t0))
-        if overflow is not None:
-            wt.evictions.append(EvictionRecord(
-                tier="short_term",
-                item_id=str(overflow.turn_index),
-                policy=EvictionPolicy.WINDOW_OVERFLOW,
-                reason=f"window full (size={self.short_term.window_size})",
-            ))
 
         # 2. long-term — conditional on the noise filter
         t0 = time.perf_counter()
@@ -187,22 +158,22 @@ class MemoryManager:
                 status=TierStatus.SKIPPED, latency_ms=_elapsed_ms(t0), stored=False
             )
 
-        # 3. episodic — conditional summarisation
+        # 3. episodic — summarise the evicted overflow (if any)
         t0 = time.perf_counter()
-        summ = self.episodic.maybe_summarise(self.short_term)
-        if summ is not None:
+        if evicted:
+            summ = self.episodic.summarise_turns(evicted)
             wt.episodic = EpisodicWrite(
                 status=TierStatus.OK,
                 latency_ms=_elapsed_ms(t0),
                 summary_produced=True,
                 summarization_tokens=summ.summarization_tokens,
             )
-            for turn in summ.evicted_turns:
+            for turn in evicted:
                 wt.evictions.append(EvictionRecord(
                     tier="short_term",
                     item_id=str(turn.turn_index),
-                    policy=EvictionPolicy.SUMMARISATION,
-                    reason=f"compressed into {summ.episode.id}",
+                    policy=EvictionPolicy.TOKEN_BUDGET,
+                    reason=f"over token budget → {summ.episode.id}",
                 ))
         else:
             wt.episodic = EpisodicWrite(
@@ -214,10 +185,8 @@ class MemoryManager:
     def assemble_prompt_traced(self, query: str) -> tuple[list[dict], ReadTrace]:
         """
         Build the LLM messages array AND the ReadTrace in a single pass.
-
-        This is the authoritative read for the turn: long-term is retrieved
-        ONCE (scores kept for the trace, prompt block formatted from the same
-        list), and the prompt is assembled identically to get_messages_for_llm.
+        Long-term is retrieved ONCE (scores kept for the trace, prompt block
+        formatted from the same list).
         """
         read = ReadTrace()
         cap = self.config.trace.snippet_max_chars
@@ -250,7 +219,7 @@ class MemoryManager:
                     id=m.id,
                     score=m.relevance_score,
                     snippet=m.content[:cap],
-                    used_in_prompt=True,  # trivially True until token budgets (slice 5)
+                    used_in_prompt=True,  # trivially True until a prompt-assembly budget (follow-up)
                 )
                 for m in memories
             ],
@@ -285,7 +254,7 @@ class MemoryManager:
         return (
             f"MemoryManager("
             f"session={self.session_id}, "
-            f"short_term={len(self.short_term)}, "
+            f"short_term={len(self.short_term)} turns, "
             f"long_term={self.long_term.count()}, "
             f"episodes={len(self.episodic)})"
         )
