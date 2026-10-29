@@ -51,27 +51,13 @@ def _low_threshold_config() -> AppConfig:
     )
 
 
-@pytest.fixture
-def cleanup_agents():
-    created: list[MemoryAgent] = []
-    yield created
-    for a in created:
-        try:
-            a.memory.long_term._chroma.delete_collection(
-                a.memory.long_term._collection.name
-            )
-        except Exception:
-            pass
-
-
 @pytest.mark.parametrize("case", DATASET.episodic_cases, ids=lambda c: c.id)
-def test_episode_retains_facts(cleanup_agents, case):
+def test_episode_retains_facts(make_agent, case):
     """Every fact compressed into an episode must still be present in the summary."""
-    agent = MemoryAgent(
-        _low_threshold_config(),
-        session_id=f"eval-epi-{case.id}-{uuid.uuid4().hex[:8]}",
+    agent = make_agent(
+    f"eval-epi-{case.id}-{uuid.uuid4().hex[:8]}",
+    config=_low_threshold_config(),
     )
-    cleanup_agents.append(agent)
 
     facts = [DATASET.fact_by_id(fid) for fid in case.facts]
     # plant as user turns to drive summarisation (threshold = 3)

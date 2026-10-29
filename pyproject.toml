@@ -6,6 +6,28 @@ build-backend = "setuptools.build_meta"
 name = "memoryos"
 version = "0.1.0"
 requires-python = ">=3.10"
+dependencies = [
+    "openai",
+    "chromadb",
+    "tiktoken",
+    "fastapi",
+    "uvicorn",
+    "streamlit",
+    "pydantic",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+markers = [
+    "integration: makes real OpenAI API calls; excluded from CI, run locally",
+]
+filterwarnings = [
+    "ignore:.*CallSpec2 has been renamed.*",
+]
