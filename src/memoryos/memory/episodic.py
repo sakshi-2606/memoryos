@@ -1,7 +1,7 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from openai import OpenAI
-from memoryos.config import MemoryConfig, ModelConfig
+from memoryos.config import ModelConfig
 from memoryos.memory.short_term import Message
 
 
@@ -20,11 +20,6 @@ class SummarisationResult:
     """
     What one summarisation pass produced — the tier's own domain facts,
     handed back to the coordinator so it can record them in the trace.
-
-    - episode: the Episode that was created and stored.
-    - evicted_turns: the turns removed from short-term to make this episode
-      (the second eviction path — policy = summarisation).
-    - summarization_tokens: tokens the LLM summariser call spent.
     """
     episode: Episode
     evicted_turns: list[Message]
@@ -33,16 +28,11 @@ class SummarisationResult:
 
 class EpisodicMemory:
     """
-    Summarisation layer that compresses old short-term turns into episodes.
+    Summarisation layer that compresses batches of evicted turns into episodes.
 
-    When short-term memory signals it's ready to summarise, this class:
-    1. Takes the oldest N turns from short-term
-    2. Sends them to the LLM for summarisation
-    3. Stores the resulting Episode
-    4. Returns the evicted turns so short-term can remove them
-
-    Episodes are kept in-memory (list) for now.
-    In production you'd persist these to a DB alongside long-term memory.
+    With token-based eviction, the short-term tier decides WHICH turns leave
+    (when the token budget is exceeded); this tier takes that evicted batch and
+    compresses it into one episode. Episodes are kept in-memory for now.
     """
 
     SUMMARISE_PROMPT = """You are a conversation memory compressor.
@@ -58,12 +48,7 @@ Conversation turns:
 
 Summary:"""
 
-    def __init__(
-        self,
-        memory_config: MemoryConfig,
-        model_config: ModelConfig,
-    ) -> None:
-        self.turns_to_summarise = memory_config.turns_to_summarise
+    def __init__(self, model_config: ModelConfig) -> None:
         self.llm_model = model_config.llm_model
         self._client = OpenAI()
         self._episodes: list[Episode] = []
@@ -79,10 +64,7 @@ Summary:"""
     def _summarise(self, turns: list[Message]) -> tuple[str, int]:
         """
         Call LLM to summarise a list of turns into one episode.
-
-        Returns (summary_text, tokens_used). The token count used to be
-        discarded on response.usage; we keep it so the trace can report the
-        real cost of summarisation.
+        Returns (summary_text, tokens_used).
         """
         formatted = self._format_turns_for_prompt(turns)
         prompt = self.SUMMARISE_PROMPT.format(turns=formatted)
@@ -97,44 +79,32 @@ Summary:"""
         tokens = response.usage.total_tokens if response.usage else 0
         return text, tokens
 
-    def maybe_summarise(self, short_term) -> SummarisationResult | None:
+    def summarise_turns(self, turns: list[Message]) -> SummarisationResult | None:
         """
-        Check if short-term memory is ready for summarisation.
-        If yes: evict oldest turns, summarise, store episode, return a
-        SummarisationResult (episode + evicted turns + token cost).
-        If no: return None.
+        Summarise a batch of already-evicted turns into one episode.
 
-        Args:
-            short_term: ShortTermMemory instance
+        Returns a SummarisationResult (episode + the turns + token cost), or
+        None for an empty batch. The caller (manager) supplies the batch that
+        the short-term tier evicted for exceeding the token budget.
         """
-        if not short_term.should_summarise():
+        if not turns:
             return None
 
-        # Evict oldest N turns from short-term
-        evicted_turns = short_term.evict_oldest(self.turns_to_summarise)
-        if not evicted_turns:
-            return None
+        summary_text, summarization_tokens = self._summarise(turns)
 
-        # Summarise the evicted turns
-        summary_text, summarization_tokens = self._summarise(evicted_turns)
-
-        # Create and store the episode
         episode = Episode(
             id=f"episode_{self._episode_counter:04d}",
             summary=summary_text,
-            turn_range=(
-                evicted_turns[0].turn_index,
-                evicted_turns[-1].turn_index
-            ),
+            turn_range=(turns[0].turn_index, turns[-1].turn_index),
             timestamp=datetime.utcnow().isoformat(),
-            source_turn_count=len(evicted_turns),
+            source_turn_count=len(turns),
         )
         self._episodes.append(episode)
         self._episode_counter += 1
 
         return SummarisationResult(
             episode=episode,
-            evicted_turns=evicted_turns,
+            evicted_turns=turns,
             summarization_tokens=summarization_tokens,
         )
 
@@ -143,10 +113,7 @@ Summary:"""
         return list(self._episodes)
 
     def to_prompt_format(self) -> str:
-        """
-        Format all episodes as a context block for the system prompt.
-        Injected before short-term and long-term context.
-        """
+        """Format all episodes as a context block for the system prompt."""
         if not self._episodes:
             return ""
 

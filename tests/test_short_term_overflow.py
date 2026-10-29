@@ -1,45 +1,44 @@
 """
-API-free test: short-term window overflow is captured and returned.
+API-free test: short-term TOKEN-budget eviction returns the overflow batch.
 
-No OpenAI calls and no chromadb import — this exercises only the in-memory
-deque behaviour, so it's fast and free. Proves the silent-drop path now
-reports what it dropped.
+Uses a simple word-count token counter (no tiktoken, no network) so the budget
+arithmetic is easy to reason about. Proves that exceeding the budget evicts the
+oldest turns down to the watermark and hands them back (for summarisation),
+rather than silently dropping them.
 
 Run from repo root (venv active):
-    python tests/test_short_term_overflow.py
+    python -m pytest tests/test_short_term_overflow.py -v
 """
 
 from memoryos.config import MemoryConfig
 from memoryos.memory.short_term import ShortTermMemory
 
 
-def test_window_overflow_captured() -> None:
-    # tiny window so we can force overflow in a few adds
-    cfg = MemoryConfig(short_term_window=3)
-    st = ShortTermMemory(cfg)
+def _words(text: str) -> int:
+    return len(text.split())
 
-    # fill to capacity — nothing should be evicted yet
+
+def test_window_overflow_captured() -> None:
+    # budget 10 "tokens" (= words), evict down to 50% (watermark = 5)
+    cfg = MemoryConfig(short_term_token_budget=10, short_term_evict_to_fraction=0.5)
+    st = ShortTermMemory(cfg, token_counter=_words)
+
+    # three 3-word turns: 3 -> 6 -> 9 tokens, all within budget (no eviction)
     for i in range(3):
-        _msg, evicted = st.add("user", f"message {i}")
-        assert evicted is None, f"unexpected eviction while filling (#{i})"
+        _msg, evicted = st.add("user", "one two three")
+        assert evicted == [], f"unexpected eviction at turn {i}"
+    assert st.total_tokens() == 9
     assert len(st) == 3
 
-    # next add overflows: the oldest (turn_index 0) should come back as evicted
-    _msg, evicted = st.add("user", "message 3")
-    assert evicted is not None, "overflow was not captured"
-    assert evicted.turn_index == 0, f"wrong item evicted: turn {evicted.turn_index}"
-    assert evicted.content == "message 0"
-    assert len(st) == 3, "buffer should stay at capacity"
+    # a 4th 3-word turn -> 12 tokens > budget 10: evict oldest down to <= 5
+    _msg, evicted = st.add("user", "four five six")
+    # pop turn0 (->9), turn1 (->6), turn2 (->3 <= 5, stop) => evicted 0,1,2
+    assert [m.turn_index for m in evicted] == [0, 1, 2]
+    assert st.total_tokens() == 3        # only the newest turn remains
+    assert len(st) == 1
 
-    # one more overflow: now turn_index 1 is the one pushed out
-    _msg, evicted = st.add("user", "message 4")
-    assert evicted is not None
-    assert evicted.turn_index == 1
-    assert evicted.content == "message 1"
-
-    print("✓ window overflow captured correctly")
-    print(f"  last evicted: turn={evicted.turn_index}, content={evicted.content!r}")
-
-
-if __name__ == "__main__":
-    test_window_overflow_captured()
+    # a single over-budget turn is kept, not dropped (never evict the newest)
+    st2 = ShortTermMemory(cfg, token_counter=_words)
+    _msg, evicted = st2.add("user", "a b c d e f g h i j k l")  # 12 > 10
+    assert evicted == []
+    assert len(st2) == 1

@@ -1,59 +1,65 @@
-from collections import deque
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
+from typing import Callable
 from memoryos.config import MemoryConfig
 
 
 @dataclass
 class Message:
     """A single turn in a conversation."""
-    role: str        # "user" or "assistant"
+    role: str
     content: str
-    turn_index: int  # position in conversation, used by episodic tier later
+    turn_index: int
 
 
 class ShortTermMemory:
     """
-    Sliding window buffer of recent conversation turns.
+    Token-budgeted buffer of recent conversation turns.
 
-    Holds the last `window_size` messages in RAM.
-    When full, oldest message is automatically evicted.
-    No persistence — resets when the process restarts.
+    Holds recent turns up to `short_term_token_budget` tokens (measured by an
+    injected token counter). When a new turn pushes the buffer over budget, the
+    oldest turns are evicted down to a low watermark and RETURNED so the
+    coordinator can summarise them into an episode — nothing is silently dropped.
     """
 
-    def __init__(self, config: MemoryConfig) -> None:
-        self.window_size = config.short_term_window
-        self.summarisation_threshold = config.summarisation_threshold
-        self._buffer: deque[Message] = deque(maxlen=config.short_term_window)
+    def __init__(
+        self,
+        config: MemoryConfig,
+        token_counter: Callable[[str], int],
+    ) -> None:
+        self.token_budget = config.short_term_token_budget
+        self.evict_to = int(
+            config.short_term_token_budget * config.short_term_evict_to_fraction
+        )
+        self._count_tokens = token_counter
+        self._buffer: list[Message] = []
         self._turn_counter: int = 0
 
-    def add(self, role: str, content: str) -> tuple[Message, Message | None]:
+    def total_tokens(self) -> int:
+        """Current token footprint of the buffer."""
+        return sum(self._count_tokens(m.content) for m in self._buffer)
+
+    def add(self, role: str, content: str) -> tuple[Message, list[Message]]:
         """
-        Add a new message to the buffer.
+        Append a message. If the buffer exceeds the token budget, evict the
+        oldest turns down to the low watermark and return them.
 
         Returns (message, evicted):
-          message  — the Message just added.
-          evicted  — the oldest Message that was silently pushed out because
-                     the window was already full (deque maxlen), or None if
-                     nothing was dropped.
-
-        Why the peek: a deque(maxlen) drops its leftmost item automatically on
-        overflow and tells you nothing. Capturing that item here is what lets
-        the coordinator record a window-overflow eviction in the memory trace.
-        The buffer's behaviour is otherwise unchanged.
+          message — the Message just added.
+          evicted — oldest Messages removed because the budget was exceeded
+                    (empty if the buffer is still within budget). These are
+                    handed to the episodic tier for summarisation, not dropped.
         """
-        evicted: Message | None = None
-        if self._buffer.maxlen is not None and len(self._buffer) == self._buffer.maxlen:
-            # buffer is full — the leftmost item is about to be pushed out
-            evicted = self._buffer[0]
-
-        message = Message(
-            role=role,
-            content=content,
-            turn_index=self._turn_counter
-        )
+        message = Message(role=role, content=content, turn_index=self._turn_counter)
         self._buffer.append(message)
         self._turn_counter += 1
+
+        evicted: list[Message] = []
+        if self.total_tokens() > self.token_budget:
+            # Evict oldest until at/under the watermark. Never evict the newest
+            # turn (a single over-budget turn is kept rather than dropped).
+            while len(self._buffer) > 1 and self.total_tokens() > self.evict_to:
+                evicted.append(self._buffer.pop(0))
+
         return message, evicted
 
     def get_all(self) -> list[Message]:
@@ -62,33 +68,10 @@ class ShortTermMemory:
 
     def get_recent(self, n: int) -> list[Message]:
         """Return the n most recent messages."""
-        all_messages = list(self._buffer)
-        return all_messages[-n:] if n < len(all_messages) else all_messages
-
-    def should_summarise(self) -> bool:
-        """
-        Returns True when the buffer has enough turns to trigger
-        episodic summarisation. The episodic tier checks this.
-        """
-        return len(self._buffer) >= self.summarisation_threshold
-
-    def evict_oldest(self, n: int) -> list[Message]:
-        """
-        Remove and return the n oldest messages from the buffer.
-        Called by the episodic tier after summarisation.
-        """
-        evicted = []
-        for _ in range(min(n, len(self._buffer))):
-            evicted.append(self._buffer.popleft())
-        return evicted
+        return self._buffer[-n:] if n < len(self._buffer) else list(self._buffer)
 
     def to_prompt_format(self) -> list[dict]:
-        """
-        Convert buffer to OpenAI message format for direct injection
-        into the LLM prompt.
-
-        Returns: [{"role": "user", "content": "..."}, ...]
-        """
+        """Convert buffer to OpenAI message format for prompt injection."""
         return [
             {"role": msg.role, "content": msg.content}
             for msg in self._buffer
@@ -100,6 +83,6 @@ class ShortTermMemory:
     def __repr__(self) -> str:
         return (
             f"ShortTermMemory("
-            f"window={self.window_size}, "
-            f"current={len(self._buffer)} messages)"
+            f"budget={self.token_budget} tokens, "
+            f"current={self.total_tokens()} tokens / {len(self._buffer)} turns)"
         )

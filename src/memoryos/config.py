@@ -9,20 +9,20 @@ load_dotenv()
 class MemoryConfig:
     """Configuration for all three memory tiers."""
 
-    # Short-term: sliding window size (number of turns to keep in buffer)
-    short_term_window: int = 10
+    # Short-term: token budget for the recent-turns buffer (tiktoken-measured).
+    # When a new turn pushes the buffer over this, oldest turns are evicted.
+    short_term_token_budget: int = 2000
+
+    # On overflow, evict oldest turns down to this fraction of the budget
+    # (a low watermark) and summarise the evicted batch into one episode.
+    short_term_evict_to_fraction: float = 0.5
 
     # Long-term: how many memories to retrieve per query
     long_term_top_k: int = 5
 
-    # Long-term: minimum similarity score to include a memory (0.0 to 1.0)
+    # Long-term: minimum similarity score to include a memory (0.0 to 1.0),
+    # calibrated via scripts/threshold_sweep.py (F2)
     long_term_similarity_threshold: float = 0.40
-
-    # Episodic: summarise when buffer exceeds this many turns
-    summarisation_threshold: int = 8
-
-    # Episodic: how many turns to compress into one summary
-    turns_to_summarise: int = 4
 
 
 @dataclass(frozen=True)
@@ -49,20 +49,15 @@ class StorageConfig:
     )
     collection_name: str = "long_term_memory"
 
+
 @dataclass(frozen=True)
 class TraceConfig:
     """Configuration for the per-turn memory trace."""
- 
-    # Master switch. When False, the turn loop skips building the trace entirely.
+
     enabled: bool = True
- 
-    # When True, the full trace is attached to the /chat HTTP response.
-    # Turn off if the response gets noisy — the trace can still be logged/dumped.
     include_in_response: bool = True
- 
-    # Snippets of retrieved memories / episodes are truncated to this many chars
-    # so the trace stays compact.
     snippet_max_chars: int = 200
+
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -77,15 +72,17 @@ class AppConfig:
     )
 
     def validate(self) -> None:
-        """Fail fast if critical config is missing."""
+        """Fail fast if critical config is missing or inconsistent."""
         if not self.openai_api_key:
             raise ValueError(
                 "OPENAI_API_KEY is not set. "
                 "Copy .env.example to .env and add your key."
             )
-        if self.memory.turns_to_summarise >= self.memory.short_term_window:
+        if self.memory.short_term_token_budget <= 0:
+            raise ValueError("short_term_token_budget must be positive.")
+        if not 0.0 < self.memory.short_term_evict_to_fraction < 1.0:
             raise ValueError(
-                "turns_to_summarise must be less than short_term_window."
+                "short_term_evict_to_fraction must be between 0 and 1 (exclusive)."
             )
 
 
