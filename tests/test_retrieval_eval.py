@@ -30,33 +30,6 @@ pytestmark = pytest.mark.integration
 DATASET = load_dataset(Path(__file__).parent / "memeval_dataset.json")
 
 
-@pytest.fixture
-def make_agent():
-    """
-    Factory that builds an agent and plants facts straight into long-term
-    (embeddings only — no LLM). Cleans up each session's Chroma collection
-    afterwards so the eval doesn't litter the store.
-    """
-    created: list[MemoryAgent] = []
-
-    def _factory(session_id: str, facts) -> MemoryAgent:
-        agent = MemoryAgent(AppConfig(), session_id=session_id)
-        for f in facts:
-            agent.memory.long_term.add("user", f.content, turn_index=0)
-        created.append(agent)
-        return agent
-
-    yield _factory
-
-    for a in created:
-        try:
-            a.memory.long_term._chroma.delete_collection(
-                a.memory.long_term._collection.name
-            )
-        except Exception:
-            pass
-
-
 def _retrieved_fact_ids(memories, facts) -> list[str]:
     """Map retrieved memory contents back to their planted fact ids (rank order preserved)."""
     by_content = {f.content: f.id for f in facts}

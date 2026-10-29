@@ -28,28 +28,6 @@ pytestmark = pytest.mark.integration
 DATASET = load_dataset(Path(__file__).parent / "memeval_dataset.json")
 
 
-@pytest.fixture
-def make_agent():
-    created: list[MemoryAgent] = []
-
-    def _factory(session_id: str, facts) -> MemoryAgent:
-        agent = MemoryAgent(AppConfig(), session_id=session_id)
-        for f in facts:
-            agent.memory.long_term.add("user", f.content, turn_index=0)
-        created.append(agent)
-        return agent
-
-    yield _factory
-
-    for a in created:
-        try:
-            a.memory.long_term._chroma.delete_collection(
-                a.memory.long_term._collection.name
-            )
-        except Exception:
-            pass
-
-
 @pytest.mark.parametrize("leak", DATASET.leakage_probes, ids=lambda l: l.id)
 def test_no_cross_session_leakage(make_agent, leak):
     """A fact planted in one session must not surface in another session's retrieval."""
