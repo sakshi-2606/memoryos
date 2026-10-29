@@ -76,31 +76,35 @@ class MemoryAgent:
         Process one user turn end-to-end, and (when enabled) assemble the
         per-turn MemoryTrace from the manager's traced reports.
 
-        Stages, each timed here at the agent layer:
-          user_write -> read (prompt assembly) -> llm -> assistant_write
+        Ordering (fixes F1 — self-retrieval): the READ happens before the writes,
+        so retrieval sees memory as it stood BEFORE this turn and the current
+        message can't match itself. This also keeps the current message out of
+        the short-term block (it's appended once, below), removing the old
+        duplicate-in-prompt quirk.
+
+            read -> LLM -> user_write -> assistant_write
         """
         self._turn_count += 1
         turn_start = time.perf_counter()
 
-        # 1. user-message write
-        t0 = time.perf_counter()
-        user_wt = self.memory.add_message_traced("user", user_message, label="user")
-        user_write_ms = _elapsed_ms(t0)
-
-        # 2. read: assemble the prompt + the ReadTrace (single authoritative read)
+        # 1. read: assemble the prompt + ReadTrace from memory BEFORE this turn
         t0 = time.perf_counter()
         messages, read = self.memory.assemble_prompt_traced(user_message)
         read_ms = _elapsed_ms(t0)
 
-        # 3. append the current user message
+        # 2. append the current user message to the prompt
         messages.append({"role": "user", "content": user_message})
 
-        # 4. LLM call
+        # 3. LLM call
         t0 = time.perf_counter()
         response_text, answer_tokens = self._call_llm(messages)
         llm_ms = _elapsed_ms(t0)
 
-        # 5. assistant-message write
+        # 4. NOW write the turn to memory (user then assistant), for future turns
+        t0 = time.perf_counter()
+        user_wt = self.memory.add_message_traced("user", user_message, label="user")
+        user_write_ms = _elapsed_ms(t0)
+
         t0 = time.perf_counter()
         assistant_wt = self.memory.add_message_traced(
             "assistant", response_text, label="assistant"
@@ -109,7 +113,7 @@ class MemoryAgent:
 
         total_ms = _elapsed_ms(turn_start)
 
-        # 6. assemble the trace (gated by config)
+        # 5. assemble the trace (gated by config)
         trace = None
         if self.config.trace.enabled:
             trace = MemoryTrace(
@@ -147,8 +151,7 @@ class MemoryAgent:
             "response": response_text,
             "session_id": self.session_id,
             "turn": self._turn_count,
-            # legacy UI metadata — now derived from the traced reports
-            # (the redundant second get_context() retrieval is gone)
+            # legacy UI metadata — derived from the traced reports
             "memory": {
                 "added_to_long_term": user_wt.long_term.stored,
                 "episode_created": (

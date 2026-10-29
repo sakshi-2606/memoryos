@@ -113,13 +113,6 @@ def test_threshold_excludes_distractors(make_agent):
         f"retrieved {retrieved}"
     )
 
-
-@pytest.mark.xfail(
-    reason="F1: agent.chat writes the user message to long-term BEFORE the read, "
-           "so the current query retrieves itself at score 1.0. Fix in the "
-           "retrieval-ordering slice, then remove this marker.",
-    strict=True,
-)
 def test_turn_does_not_retrieve_current_query(make_agent):
     """A live turn should not surface the current query as its own top memory."""
     probe = DATASET.retrieval_probes[0]
