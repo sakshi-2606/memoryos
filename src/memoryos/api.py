@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from memoryos.agent import MemoryAgent
 from memoryos.config import AppConfig
+from fastapi.responses import JSONResponse
 
 
 # ── Request / Response Models ──────────────────────────────────────────────
@@ -78,6 +79,27 @@ async def health():
         "model": _config.model.llm_model,
     }
 
+@app.get("/ready")
+async def ready():
+    """Readiness — are dependencies actually usable? 503 if not."""
+    checks = {"openai_key": bool(_config.openai_api_key)}
+    try:
+        import chromadb
+        from chromadb.config import Settings
+        client = chromadb.PersistentClient(
+            path=_config.storage.chroma_persist_dir,
+            settings=Settings(anonymized_telemetry=False),
+        )
+        client.heartbeat()
+        checks["chromadb"] = True
+    except Exception:
+        checks["chromadb"] = False
+
+    ok = all(checks.values())
+    return JSONResponse(
+        status_code=200 if ok else 503,
+        content={"ready": ok, "checks": checks},
+    )
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
