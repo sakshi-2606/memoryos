@@ -39,3 +39,4 @@ Thumbs.db
 # Experiment tracking
 mlruns/
 wandb/
+traces/

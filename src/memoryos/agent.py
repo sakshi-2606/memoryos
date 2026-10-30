@@ -5,6 +5,7 @@ from openai import OpenAI, RateLimitError, APIError
 from memoryos.config import AppConfig
 from memoryos.memory.manager import MemoryManager
 from memoryos.memory.trace import MemoryTrace, Totals
+from memoryos.observability import TraceLogger
 
 
 def _elapsed_ms(start: float) -> float:
@@ -32,6 +33,10 @@ class MemoryAgent:
         self.memory = MemoryManager(config, self.session_id)
         self._client = OpenAI()
         self._turn_count = 0
+        self._trace_logger = TraceLogger(
+              config.observability.trace_log_path,
+              enabled=config.observability.enabled,
+          )
 
     def _call_llm(self, messages: list[dict]) -> tuple[str, int]:
         """
@@ -146,6 +151,8 @@ class MemoryAgent:
                     answer_tokens=answer_tokens,
                 ),
             )
+        if trace is not None:
+            self._trace_logger.log(trace)
 
         return {
             "response": response_text,
