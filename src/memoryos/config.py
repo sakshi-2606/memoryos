@@ -58,6 +58,14 @@ class TraceConfig:
     include_in_response: bool = True
     snippet_max_chars: int = 200
 
+@dataclass(frozen=True)
+class ObservabilityConfig:
+    """Configuration for the per-turn trace sink."""
+
+    enabled: bool = True
+    trace_log_path: str = field(
+        default_factory=lambda: os.getenv("TRACE_LOG_PATH", "./traces/traces.jsonl")
+    )
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -67,6 +75,7 @@ class AppConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     trace: TraceConfig = field(default_factory=TraceConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     openai_api_key: str = field(
         default_factory=lambda: os.getenv("OPENAI_API_KEY", "")
     )
