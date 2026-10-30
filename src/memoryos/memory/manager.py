@@ -17,16 +17,19 @@ def _elapsed_ms(start: float) -> float:
     return round((time.perf_counter() - start) * 1000, 2)
 
 
+def _detail(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
 class MemoryManager:
     """
     Coordinates all three memory tiers.
 
-    Responsibilities:
-    - Route incoming messages to the right tiers
-    - Assemble context from all tiers for each LLM call
-    - Summarise turns the short-term tier evicts for exceeding its token budget
-    - Produce the per-turn memory trace (times each tier call from out here,
-      reads each tier's returned domain facts, and records them).
+    Memory-tier failures are handled gracefully: a failing tier is recorded in
+    the trace (status=error + error_detail) and the turn DEGRADES rather than
+    crashing — a down vector store answers without retrieved context, a failed
+    summarisation skips the episode. The answer-generation LLM call (in the
+    agent) is the only failure that legitimately fails the turn.
     """
 
     # Messages shorter than this are not stored in long-term
@@ -54,7 +57,6 @@ class MemoryManager:
         except KeyError:
             self._token_encoder = tiktoken.get_encoding("cl100k_base")
 
-        # Instantiate all three tiers
         self.short_term = ShortTermMemory(config.memory, self._count_tokens)
         self.long_term = LongTermMemory(
             memory_config=config.memory,
@@ -67,7 +69,6 @@ class MemoryManager:
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _is_worth_storing(self, content: str) -> bool:
-        """Rule-based filter: skip noise before embedding."""
         normalized = content.strip().lower().rstrip("!.")
         if normalized in self.NOISE_PHRASES:
             return False
@@ -76,15 +77,14 @@ class MemoryManager:
         return True
 
     def _count_tokens(self, text: str) -> int:
-        """Token count for a block of text (0 for empty)."""
         if not text:
             return 0
         return len(self._token_encoder.encode(text))
 
-    # ── legacy (untraced) API — kept so existing callers keep working ─────────
+    # ── legacy (untraced) API ─────────────────────────────────────────────────
 
     def add_message(self, role: str, content: str) -> dict:
-        """Process an incoming message through all tiers (legacy dict return)."""
+        """Legacy dict return. Degrades on tier failure like the traced path."""
         result = {
             "added_to_short_term": False,
             "added_to_long_term": False,
@@ -95,18 +95,23 @@ class MemoryManager:
         result["added_to_short_term"] = True
 
         if self._is_worth_storing(content):
-            self.long_term.add(role, content, turn_index=message.turn_index)
-            result["added_to_long_term"] = True
+            try:
+                self.long_term.add(role, content, turn_index=message.turn_index)
+                result["added_to_long_term"] = True
+            except Exception:
+                pass  # degrade: not stored
 
         if evicted:
-            summ = self.episodic.summarise_turns(evicted)
-            if summ:
-                result["episode_created"] = summ.episode
+            try:
+                summ = self.episodic.summarise_turns(evicted)
+                if summ:
+                    result["episode_created"] = summ.episode
+            except Exception:
+                pass  # degrade: no episode this turn
 
         return result
 
     def get_context(self, current_query: str) -> dict:
-        """Assemble context from all three tiers (untraced; double-retrieves)."""
         return {
             "episodic": self.episodic.to_prompt_format(),
             "long_term": self.long_term.to_prompt_format(current_query),
@@ -114,7 +119,6 @@ class MemoryManager:
         }
 
     def build_system_prompt(self, current_query: str) -> str:
-        """Assemble memory tiers into one system prompt block (untraced)."""
         context = self.get_context(current_query)
         sections = [self._BASE_SYSTEM_PROMPT]
         if context["episodic"]:
@@ -124,56 +128,67 @@ class MemoryManager:
         return "\n\n".join(sections)
 
     def get_messages_for_llm(self, current_query: str) -> list[dict]:
-        """Build the full messages array for the OpenAI API call (untraced)."""
         messages = [
             {"role": "system", "content": self.build_system_prompt(current_query)}
         ]
         messages.extend(self.short_term.to_prompt_format())
         return messages
 
-    # ── traced API — the coordinator layer for the memory trace ──────────────
+    # ── traced API — with graceful tier-failure handling ──────────────────────
 
     def add_message_traced(self, role: str, content: str, label: str = "") -> WriteTrace:
-        """
-        Same tier operations as add_message(), but returns a WriteTrace recording
-        per-tier status/latency, long-term stored flag, summarisation tokens, and
-        every eviction (now driven by the short-term token budget).
-        """
         wt = WriteTrace(label=label)
 
-        # 1. short-term — always; token-budget eviction returns the overflow
+        # 1. short-term — in-memory, always succeeds; token-budget eviction
+        #    returns the overflow batch
         t0 = time.perf_counter()
         message, evicted = self.short_term.add(role, content)
         wt.short_term = ShortTermWrite(status=TierStatus.OK, latency_ms=_elapsed_ms(t0))
 
-        # 2. long-term — conditional on the noise filter
+        # 2. long-term — conditional; degrade (don't crash) on store failure
         t0 = time.perf_counter()
         if self._is_worth_storing(content):
-            self.long_term.add(role, content, turn_index=message.turn_index)
-            wt.long_term = LongTermWrite(
-                status=TierStatus.OK, latency_ms=_elapsed_ms(t0), stored=True
-            )
+            try:
+                self.long_term.add(role, content, turn_index=message.turn_index)
+                wt.long_term = LongTermWrite(
+                    status=TierStatus.OK, latency_ms=_elapsed_ms(t0), stored=True
+                )
+            except Exception as e:
+                wt.long_term = LongTermWrite(
+                    status=TierStatus.ERROR, latency_ms=_elapsed_ms(t0),
+                    stored=False, error_detail=_detail(e),
+                )
         else:
             wt.long_term = LongTermWrite(
                 status=TierStatus.SKIPPED, latency_ms=_elapsed_ms(t0), stored=False
             )
 
-        # 3. episodic — summarise the evicted overflow (if any)
+        # 3. episodic — summarise the evicted overflow; degrade on failure
         t0 = time.perf_counter()
         if evicted:
-            summ = self.episodic.summarise_turns(evicted)
-            wt.episodic = EpisodicWrite(
-                status=TierStatus.OK,
-                latency_ms=_elapsed_ms(t0),
-                summary_produced=True,
-                summarization_tokens=summ.summarization_tokens,
-            )
+            try:
+                summ = self.episodic.summarise_turns(evicted)
+                wt.episodic = EpisodicWrite(
+                    status=TierStatus.OK,
+                    latency_ms=_elapsed_ms(t0),
+                    summary_produced=True,
+                    summarization_tokens=summ.summarization_tokens,
+                )
+                reason = f"over token budget → {summ.episode.id}"
+            except Exception as e:
+                wt.episodic = EpisodicWrite(
+                    status=TierStatus.ERROR,
+                    latency_ms=_elapsed_ms(t0),
+                    summary_produced=False,
+                    error_detail=_detail(e),
+                )
+                reason = "over token budget → summarisation failed (turns dropped)"
             for turn in evicted:
                 wt.evictions.append(EvictionRecord(
                     tier="short_term",
                     item_id=str(turn.turn_index),
                     policy=EvictionPolicy.TOKEN_BUDGET,
-                    reason=f"over token budget → {summ.episode.id}",
+                    reason=reason,
                 ))
         else:
             wt.episodic = EpisodicWrite(
@@ -183,15 +198,10 @@ class MemoryManager:
         return wt
 
     def assemble_prompt_traced(self, query: str) -> tuple[list[dict], ReadTrace]:
-        """
-        Build the LLM messages array AND the ReadTrace in a single pass.
-        Long-term is retrieved ONCE (scores kept for the trace, prompt block
-        formatted from the same list).
-        """
         read = ReadTrace()
         cap = self.config.trace.snippet_max_chars
 
-        # episodic read
+        # episodic read — in-memory
         t0 = time.perf_counter()
         episodic_block = self.episodic.to_prompt_format()
         ep_latency = _elapsed_ms(t0)
@@ -206,27 +216,37 @@ class MemoryManager:
             tokens_contributed=self._count_tokens(episodic_block),
         )
 
-        # long-term read — retrieve once, keep scores, then format
+        # long-term read — retrieve once; degrade to no context on failure
         t0 = time.perf_counter()
-        memories = self.long_term.retrieve(query)
-        lt_latency = _elapsed_ms(t0)
-        lt_block = self.long_term.format_memories(memories)
-        read.long_term = LongTermRead(
-            status=TierStatus.OK if memories else TierStatus.EMPTY,
-            latency_ms=lt_latency,
-            retrieved=[
-                RetrievedItem(
-                    id=m.id,
-                    score=m.relevance_score,
-                    snippet=m.content[:cap],
-                    used_in_prompt=True,  # trivially True until a prompt-assembly budget (follow-up)
-                )
-                for m in memories
-            ],
-            tokens_contributed=self._count_tokens(lt_block),
-        )
+        try:
+            memories = self.long_term.retrieve(query)
+            lt_latency = _elapsed_ms(t0)
+            lt_block = self.long_term.format_memories(memories)
+            read.long_term = LongTermRead(
+                status=TierStatus.OK if memories else TierStatus.EMPTY,
+                latency_ms=lt_latency,
+                retrieved=[
+                    RetrievedItem(
+                        id=m.id,
+                        score=m.relevance_score,
+                        snippet=m.content[:cap],
+                        used_in_prompt=True,
+                    )
+                    for m in memories
+                ],
+                tokens_contributed=self._count_tokens(lt_block),
+            )
+        except Exception as e:
+            lt_block = ""   # degrade: answer without long-term context
+            read.long_term = LongTermRead(
+                status=TierStatus.ERROR,
+                latency_ms=_elapsed_ms(t0),
+                retrieved=[],
+                tokens_contributed=0,
+                error_detail=_detail(e),
+            )
 
-        # short-term read
+        # short-term read — in-memory
         t0 = time.perf_counter()
         st_messages = self.short_term.to_prompt_format()
         st_latency = _elapsed_ms(t0)
@@ -238,7 +258,7 @@ class MemoryManager:
             tokens_contributed=self._count_tokens(st_text),
         )
 
-        # assemble the prompt — identical structure/order to the legacy path
+        # assemble the prompt
         sections = [self._BASE_SYSTEM_PROMPT]
         if episodic_block:
             sections.append(episodic_block)
