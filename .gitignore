@@ -6,6 +6,7 @@ dist/
 build/
 .venv/
 env/
+test_chroma/
 
 # Secrets — never commit these
 .env
