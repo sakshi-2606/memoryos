@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -71,6 +72,17 @@ def _valid_session_id(session_id: str) -> str:
         raise HTTPException(status_code=422, detail=str(e))
 
 
+def _run_turn(agent, session_id: str, message: str) -> dict:
+    """
+    Run one turn on a worker thread. The per-session lock is acquired HERE, on the
+    worker thread — never on the event-loop thread across an await (that would
+    deadlock two same-session requests). One session serialises; distinct sessions
+    run on separate threads in parallel.
+    """
+    with _store.session_lock(session_id):
+        return agent.chat(message)
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -114,10 +126,10 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     agent = _store.get_or_create(session_id)
-    # one turn at a time per session (distinct sessions still run concurrently),
-    # so the session's in-memory tiers aren't mutated by two requests at once.
-    with _store.session_lock(session_id):
-        result = agent.chat(request.message)
+    # Offload the blocking turn to a worker thread so the event loop stays free —
+    # distinct sessions run concurrently; one session serialises (lock is inside
+    # _run_turn, on the worker thread).
+    result = await asyncio.to_thread(_run_turn, agent, session_id, request.message)
 
     trace = result.get("trace") if _config.trace.include_in_response else None
 
@@ -144,7 +156,9 @@ async def get_memory(session_id: str):
 async def delete_session(session_id: str):
     """Delete a session and all its memory."""
     session_id = _valid_session_id(session_id)
-    if not _store.delete(session_id):
+    # the purge does blocking Chroma IO — run it off the event loop
+    deleted = await asyncio.to_thread(_store.delete, session_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
     return DeleteResponse(session_id=session_id, deleted=True)
 
