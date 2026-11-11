@@ -16,9 +16,7 @@ def init_session():
     if "agent" not in st.session_state:
         config = AppConfig(
             memory=MemoryConfig(
-                short_term_window=10,
-                summarisation_threshold=6,
-                turns_to_summarise=4,
+                short_term_token_budget=600,   # small demo budget → eviction + episodic summaries show up within a few turns
                 long_term_top_k=3,
             )
         )
