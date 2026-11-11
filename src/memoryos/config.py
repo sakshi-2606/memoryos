@@ -32,6 +32,7 @@ class MemoryConfig:
     forgetting_policy: str = "hybrid"
     long_term_max_episodes: int = 100
     forgetting_hybrid_weights: tuple[float, float, float] = (0.2, 0.5, 0.3)
+    prompt_context_token_budget: int = 768
 
 
 @dataclass(frozen=True)

@@ -235,7 +235,25 @@ class MemoryManager:
         try:
             memories = self.long_term.retrieve(query)
             lt_latency = _elapsed_ms(t0)
-            lt_block = self.long_term.format_memories(memories)
+
+            # Prompt-context token budget: add retrieved memories (already ranked by
+            # score) to the prompt until the budget is hit. Lower-ranked overflow is
+            # still reported in the trace, but as used_in_prompt=False.
+            budget = self.config.memory.prompt_context_token_budget
+            used: list = []
+            flags: list[bool] = []
+            full = True
+            for m in memories:
+                if full:
+                    candidate = self.long_term.format_memories(used + [m])
+                    if self._count_tokens(candidate) <= budget:
+                        used.append(m)
+                        flags.append(True)
+                        continue
+                    full = False   # first memory that doesn't fit — stop including
+                flags.append(False)
+
+            lt_block = self.long_term.format_memories(used)
             read.long_term = LongTermRead(
                 status=TierStatus.OK if memories else TierStatus.EMPTY,
                 latency_ms=lt_latency,
@@ -244,9 +262,9 @@ class MemoryManager:
                         id=m.id,
                         score=m.relevance_score,
                         snippet=m.content[:cap],
-                        used_in_prompt=True,
+                        used_in_prompt=flag,
                     )
-                    for m in memories
+                    for m, flag in zip(memories, flags)
                 ],
                 tokens_contributed=self._count_tokens(lt_block),
             )
