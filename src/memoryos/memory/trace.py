@@ -40,6 +40,7 @@ class EvictionPolicy(str, Enum):
     SUMMARISATION = "summarisation"      # evict_oldest() after an episode was made
     WINDOW_OVERFLOW = "window_overflow"  # deque(maxlen) silently dropped the oldest
     TOKEN_BUDGET = "token_budget"
+    FORGETTING = "forgetting"
 
 
 # ── Leaf records ─────────────────────────────────────────────────────────────

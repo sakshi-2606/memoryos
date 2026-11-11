@@ -158,6 +158,20 @@ class MemoryManager:
                     status=TierStatus.ERROR, latency_ms=_elapsed_ms(t0),
                     stored=False, error_detail=_detail(e),
                 )
+            else:
+                # add succeeded → forget lowest-retention memories when the store
+                # is over capacity (Hybrid by default). Best-effort: a forgetting
+                # failure must not flip a successful write to ERROR.
+                try:
+                    for c in self.long_term.maybe_forget():
+                        wt.evictions.append(EvictionRecord(
+                            tier="long_term",
+                            item_id=c.episode_id,
+                            policy=EvictionPolicy.FORGETTING,
+                            reason=f"long-term over capacity → {self.config.memory.forgetting_policy}",
+                        ))
+                except Exception:
+                    pass
         else:
             wt.long_term = LongTermWrite(
                 status=TierStatus.SKIPPED, latency_ms=_elapsed_ms(t0), stored=False
