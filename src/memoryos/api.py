@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from memoryos.config import AppConfig
 from memoryos.session_store import InMemorySessionStore, SessionStore
+from memoryos.session_id import validate_session_id, InvalidSessionId
 
 
 # ── Request / Response Models ──────────────────────────────────────────────
@@ -60,6 +61,16 @@ app = FastAPI(
 )
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+def _valid_session_id(session_id: str) -> str:
+    """Validate a session_id at the edge — reject bad input with 422, not 500."""
+    try:
+        return validate_session_id(session_id)
+    except InvalidSessionId as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -98,10 +109,11 @@ async def ready():
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Send a message and get a response. Creates a session if needed."""
+    session_id = _valid_session_id(request.session_id)
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    agent = _store.get_or_create(request.session_id)
+    agent = _store.get_or_create(session_id)
     result = agent.chat(request.message)
 
     trace = result.get("trace") if _config.trace.include_in_response else None
@@ -118,6 +130,7 @@ async def chat(request: ChatRequest):
 @app.get("/memory/{session_id}", response_model=MemoryStateResponse)
 async def get_memory(session_id: str):
     """Inspect the full memory state for a session."""
+    session_id = _valid_session_id(session_id)
     agent = _store.get(session_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
@@ -127,6 +140,7 @@ async def get_memory(session_id: str):
 @app.delete("/memory/{session_id}", response_model=DeleteResponse)
 async def delete_session(session_id: str):
     """Delete a session and all its memory."""
+    session_id = _valid_session_id(session_id)
     if not _store.delete(session_id):
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
     return DeleteResponse(session_id=session_id, deleted=True)

@@ -6,6 +6,7 @@ from chromadb.config import Settings
 from openai import OpenAI
 from memoryos.config import MemoryConfig, ModelConfig, StorageConfig
 from memoryos.memory.forgetting import ForgettingManager, EvictionCandidate
+from memoryos.session_id import validate_session_id, collection_name_for
 
 
 @dataclass
@@ -39,7 +40,8 @@ class LongTermMemory:
         self.top_k = memory_config.long_term_top_k
         self.similarity_threshold = memory_config.long_term_similarity_threshold
         self.embedding_model = model_config.embedding_model
-        self.session_id = session_id
+        # validate at the store boundary too (defence in depth beyond the API edge)
+        self.session_id = validate_session_id(session_id)
 
         # Forgetting policy (MemoryBench's winner by default: Hybrid)
         self._forgetting = ForgettingManager(
@@ -53,7 +55,7 @@ class LongTermMemory:
             path=storage_config.chroma_persist_dir,
             settings=Settings(anonymized_telemetry=False),
         )
-        collection_name = f"{storage_config.collection_name}_{session_id}"
+        collection_name = collection_name_for(storage_config.collection_name, self.session_id)
         self._collection = self._chroma.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
@@ -173,6 +175,14 @@ class LongTermMemory:
     def update_importance(self, memory_id: str, importance: float) -> None:
         """Reweight a stored memory's importance (e.g. a user flag)."""
         self._collection.update(ids=[memory_id], metadatas=[{"importance": importance}])
+
+    def purge(self) -> None:
+        """
+        Delete this session's entire collection from the store (irreversible).
+        Used on session deletion so 'forget' actually forgets — nothing persists
+        on disk for a later same-id session to resurrect.
+        """
+        self._chroma.delete_collection(self._collection.name)
 
     def count(self) -> int:
         return self._collection.count()
