@@ -108,3 +108,12 @@ class AppConfig:
 
 # Module-level singleton — import this everywhere
 config = AppConfig()
+def demo_config() -> AppConfig:
+    """The config the Streamlit demo (app.py) runs with. Lives here, and is
+    smoke-tested, so the entrypoint can't silently drift from the config schema."""
+    return AppConfig(
+        memory=MemoryConfig(
+            short_term_token_budget=600,
+            long_term_top_k=3,
+        )
+    )

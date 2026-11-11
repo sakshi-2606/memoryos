@@ -1,6 +1,7 @@
 import streamlit as st
 from memoryos.agent import MemoryAgent
 from memoryos.config import AppConfig, MemoryConfig
+from memoryos.config import demo_config
 
 # ── Page config ────────────────────────────────────────────────────────────
 
