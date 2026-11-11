@@ -29,6 +29,12 @@ class SessionStore(ABC):
     @abstractmethod
     def list_ids(self) -> list[str]: ...
 
+    @abstractmethod
+    def session_lock(self, session_id: str):
+        """Return a per-session lock. Callers hold it around a turn so one session
+        processes one request at a time, while distinct sessions run concurrently."""
+        ...
+
     def __contains__(self, session_id: str) -> bool:
         return self.get(session_id) is not None
 
@@ -43,7 +49,8 @@ class InMemorySessionStore(SessionStore):
         self._config = config
         self._agent_factory = agent_factory
         self._sessions: dict[str, MemoryAgent] = {}
-        self._lock = threading.Lock()   # guards the registry dict
+        self._lock = threading.Lock()   # guards the registry + the lock table
+        self._session_locks: dict[str, threading.Lock] = {}
 
     def get(self, session_id: str) -> MemoryAgent | None:
         return self._sessions.get(session_id)
@@ -64,9 +71,23 @@ class InMemorySessionStore(SessionStore):
                 self._sessions[session_id] = agent
             return agent
 
+    def session_lock(self, session_id: str) -> threading.Lock:
+        # Fast path: already created (dict read is atomic under the GIL).
+        lock = self._session_locks.get(session_id)
+        if lock is not None:
+            return lock
+        # Slow path: create under the registry lock, re-checking inside it.
+        with self._lock:
+            lock = self._session_locks.get(session_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._session_locks[session_id] = lock
+            return lock
+
     def delete(self, session_id: str) -> bool:
         with self._lock:
             agent = self._sessions.pop(session_id, None)
+            self._session_locks.pop(session_id, None)
         if agent is None:
             return False
         # purge persisted long-term memory too, so "forget" actually forgets and a
