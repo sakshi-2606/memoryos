@@ -54,10 +54,17 @@ class InMemorySessionStore(SessionStore):
         return self._sessions[session_id]
 
     def delete(self, session_id: str) -> bool:
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            return True
-        return False
+        agent = self._sessions.pop(session_id, None)
+        if agent is None:
+            return False
+        # purge persisted long-term memory too, so "forget" actually forgets and a
+        # later same-id session cannot resurrect it. Best-effort: the session is
+        # removed from the registry regardless of whether the purge succeeds.
+        try:
+            agent.memory.long_term.purge()
+        except Exception:
+            pass
+        return True
 
     def list_ids(self) -> list[str]:
         return list(self._sessions.keys())

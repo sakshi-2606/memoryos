@@ -176,6 +176,14 @@ class LongTermMemory:
         """Reweight a stored memory's importance (e.g. a user flag)."""
         self._collection.update(ids=[memory_id], metadatas=[{"importance": importance}])
 
+    def purge(self) -> None:
+        """
+        Delete this session's entire collection from the store (irreversible).
+        Used on session deletion so 'forget' actually forgets — nothing persists
+        on disk for a later same-id session to resurrect.
+        """
+        self._chroma.delete_collection(self._collection.name)
+
     def count(self) -> int:
         return self._collection.count()
 
