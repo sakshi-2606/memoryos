@@ -114,7 +114,10 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     agent = _store.get_or_create(session_id)
-    result = agent.chat(request.message)
+    # one turn at a time per session (distinct sessions still run concurrently),
+    # so the session's in-memory tiers aren't mutated by two requests at once.
+    with _store.session_lock(session_id):
+        result = agent.chat(request.message)
 
     trace = result.get("trace") if _config.trace.include_in_response else None
 

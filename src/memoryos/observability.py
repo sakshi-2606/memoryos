@@ -8,6 +8,7 @@ data source) and emits a one-line summary via the stdlib logger for stdout/ops.
 
 import json
 import logging
+import threading
 from pathlib import Path
 
 from memoryos.memory.trace import MemoryTrace
@@ -21,6 +22,7 @@ class TraceLogger:
     def __init__(self, log_path: str, enabled: bool = True) -> None:
         self.enabled = enabled
         self.log_path = Path(log_path)
+        self._lock = threading.Lock()   # serialises appends from concurrent turns
 
     def log(self, trace: MemoryTrace) -> None:
         """Persist one turn's trace. No-op when disabled; never raises on IO error."""
@@ -28,11 +30,15 @@ class TraceLogger:
             return
 
         record = trace.to_dict()
+        line = json.dumps(record, default=str) + "\n"   # serialise outside the lock
 
         try:
-            self.log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(record, default=str) + "\n")
+            # hold the lock only for the IO, so concurrent turns can't interleave
+            # partial lines in the JSONL log.
+            with self._lock:
+                self.log_path.parent.mkdir(parents=True, exist_ok=True)
+                with self.log_path.open("a", encoding="utf-8") as f:
+                    f.write(line)
         except Exception:
             # Observability must never break the turn — log and move on.
             logger.exception("failed to append trace to %s", self.log_path)
