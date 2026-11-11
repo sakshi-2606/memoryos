@@ -32,6 +32,7 @@ class MemoryConfig:
     forgetting_policy: str = "hybrid"
     long_term_max_episodes: int = 100
     forgetting_hybrid_weights: tuple[float, float, float] = (0.2, 0.5, 0.3)
+    prompt_context_token_budget: int = 768
 
 
 @dataclass(frozen=True)
@@ -107,3 +108,12 @@ class AppConfig:
 
 # Module-level singleton — import this everywhere
 config = AppConfig()
+def demo_config() -> AppConfig:
+    """The config the Streamlit demo (app.py) runs with. Lives here, and is
+    smoke-tested, so the entrypoint can't silently drift from the config schema."""
+    return AppConfig(
+        memory=MemoryConfig(
+            short_term_token_budget=600,
+            long_term_top_k=3,
+        )
+    )
