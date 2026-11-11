@@ -24,6 +24,15 @@ class MemoryConfig:
     # calibrated via scripts/threshold_sweep.py (F2)
     long_term_similarity_threshold: float = 0.40
 
+    # Long-term forgetting — the capacity-based eviction policy for the vector
+    # store. Defaults to MemoryBench's proven-best "hybrid" (recency + importance
+    # + surprise). When the store exceeds long_term_max_episodes, lowest-retention
+    # memories are forgotten. hybrid_weights = (recency_w, importance_w, surprise_w),
+    # must sum to 1.0.
+    forgetting_policy: str = "hybrid"
+    long_term_max_episodes: int = 100
+    forgetting_hybrid_weights: tuple[float, float, float] = (0.2, 0.5, 0.3)
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -58,14 +67,6 @@ class TraceConfig:
     include_in_response: bool = True
     snippet_max_chars: int = 200
 
-@dataclass(frozen=True)
-class ObservabilityConfig:
-    """Configuration for the per-turn trace sink."""
-
-    enabled: bool = True
-    trace_log_path: str = field(
-        default_factory=lambda: os.getenv("TRACE_LOG_PATH", "./traces/traces.jsonl")
-    )
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -75,7 +76,6 @@ class AppConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     trace: TraceConfig = field(default_factory=TraceConfig)
-    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     openai_api_key: str = field(
         default_factory=lambda: os.getenv("OPENAI_API_KEY", "")
     )
