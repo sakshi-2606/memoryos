@@ -156,7 +156,9 @@ async def get_memory(session_id: str):
 async def delete_session(session_id: str):
     """Delete a session and all its memory."""
     session_id = _valid_session_id(session_id)
-    if not _store.delete(session_id):
+    # the purge does blocking Chroma IO — run it off the event loop
+    deleted = await asyncio.to_thread(_store.delete, session_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
     return DeleteResponse(session_id=session_id, deleted=True)
 

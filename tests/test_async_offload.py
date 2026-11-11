@@ -90,3 +90,28 @@ def test_same_session_requests_serialise(monkeypatch):
     results = asyncio.run(_two_requests("same", "same"))
     assert all(r.status_code == 200 for r in results)
     assert state["max"] == 1   # never two turns at once within one session
+
+
+def test_delete_offloaded_returns_correct_status(monkeypatch):
+    # DELETE's purge runs off the loop (asyncio.to_thread); confirm the offloaded
+    # path still maps to the right status codes end-to-end.
+    class _Agent:
+        def __init__(self, session_id):
+            self.session_id = session_id
+
+    store = InMemorySessionStore(
+        config=None, agent_factory=lambda config, session_id: _Agent(session_id)
+    )
+    store.get_or_create("live")
+    monkeypatch.setattr(api, "_store", store)
+
+    async def run():
+        transport = ASGITransport(app=api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            ok = await client.delete("/memory/live")
+            missing = await client.delete("/memory/ghost")
+            return ok, missing
+
+    ok, missing = asyncio.run(run())
+    assert ok.status_code == 200        # existing session deleted
+    assert missing.status_code == 404   # unknown session
